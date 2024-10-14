@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
 import { Upload, FileText, Edit3, Download, Save, Eye, CheckCircle } from 'lucide-react'
 import OpenAI from 'openai'
+import pdfParse from 'pdf-parse'
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -24,7 +25,7 @@ export function ResumePlatform() {
   const [uploadedFileName, setUploadedFileName] = useState("")
   const [extractedSkills, setExtractedSkills] = useState<string[]>([])
   const [compatibilityScore, setCompatibilityScore] = useState(0)
-  const [feedback, setFeedback] = useState<string[]>([])
+  const [feedback, setFeedback] = useState<{ section: string; feedback: string }[]>([])
   const [improvementSuggestions, setImprovementSuggestions] = useState<string[]>([])
   const [resumeVersions, setResumeVersions] = useState<{ id: number; name: string; content: string }[]>([])
   const [currentVersionId, setCurrentVersionId] = useState<number | null>(null)
@@ -33,18 +34,29 @@ export function ResumePlatform() {
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
-      const reader = new FileReader()
-      reader.onload = async (e) => {
-        const text = e.target?.result
-        if (typeof text === 'string') {
-          setResumeContent(text)
-          setUploadSuccess(true)
-          setUploadedFileName(file.name)
-          // Automatically analyze the resume after upload
-          await analyzeResume(text)
+      try {
+        const formData = new FormData()
+        formData.append('file', file)
+
+        const response = await fetch('/api/parse-resume', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          throw new Error('Failed to parse resume')
         }
+
+        const data = await response.json()
+        setResumeContent(data.text)
+        setUploadSuccess(true)
+        setUploadedFileName(file.name)
+        // Automatically analyze the resume after upload
+        await analyzeResume(data.text)
+      } catch (error) {
+        console.error("Error parsing file:", error)
+        // Handle error (e.g., show error message to user)
       }
-      reader.readAsText(file)
     }
   }
 
@@ -58,10 +70,13 @@ export function ResumePlatform() {
         ],
         max_tokens: 150
       })
-
       const extractedSkillsText = response.choices[0].message.content
-      const skillsArray = extractedSkillsText.split(',').map(skill => skill.trim())
-      setExtractedSkills(skillsArray)
+      if (extractedSkillsText) {
+        const skillsArray = extractedSkillsText.split(',').map(skill => skill.trim())
+        setExtractedSkills(skillsArray)
+      } else {
+        console.error("No content received from OpenAI")
+      }
     } catch (error) {
       console.error("Error analyzing job description:", error)
       // Handle error (e.g., show error message to user)
@@ -76,19 +91,22 @@ export function ResumePlatform() {
 
     try {
       const response = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: "gpt-4", // Updated to GPT-4
         messages: [
-          { role: "system", content: "You are an AI assistant that analyzes resumes and provides feedback for ATS optimization. Provide a compatibility score as a percentage, followed by specific feedback and improvement suggestions." },
-          { role: "user", content: `Analyze this resume content for ATS optimization and provide feedback: ${content}. Compare it with this job description: ${jobDescription}. Format your response as follows:
-          Compatibility Score: X%
-          Feedback:
-          - Feedback point 1
-          - Feedback point 2
-          Suggestions:
-          - Suggestion 1
-          - Suggestion 2` }
+          { role: "system", content: `You are an AI assistant that analyzes resumes and provides feedback to make them optimized for Applicant Tracking Systems (ATS). Identify areas of improvement and suggest specific changes to enhance resume compatibility with ATS.
+
+Steps:
+1. Analyze Resume Content
+2. Assess ATS Compatibility
+3. Provide Feedback
+4. Suggest Improvements
+
+Output Format:
+- Specific section needing improvement: Description of the issue and suggested correction or enhancement.
+- General advice: Overall recommendations for improving the resume's ATS compatibility and effectiveness.` },
+          { role: "user", content: `Analyze this resume content for ATS optimization and provide feedback: ${content}. Compare it with this job description: ${jobDescription}. Provide a compatibility score as a percentage at the beginning of your response.` }
         ],
-        max_tokens: 500
+        max_tokens: 1000 // Increased token limit for more detailed feedback
       })
 
       const analysisResult = response.choices[0].message.content
@@ -97,11 +115,28 @@ export function ResumePlatform() {
         const scoreMatch = lines[0].match(/(\d+)%/)
         setCompatibilityScore(scoreMatch ? parseInt(scoreMatch[1]) : 0)
 
-        const feedbackStart = lines.findIndex(line => line.toLowerCase().includes('feedback:'))
-        const suggestionsStart = lines.findIndex(line => line.toLowerCase().includes('suggestions:'))
+        const feedbackItems: { section: string; feedback: string }[] = []
+        let generalAdvice: string[] = []
+        let currentSection = ""
 
-        setFeedback(lines.slice(feedbackStart + 1, suggestionsStart).filter(line => line.trim()).map(line => line.replace(/^-\s*/, '')))
-        setImprovementSuggestions(lines.slice(suggestionsStart + 1).filter(line => line.trim()).map(line => line.replace(/^-\s*/, '')))
+        lines.slice(1).forEach(line => {
+          if (line.includes(":")) {
+            const [section, feedback] = line.split(":")
+            if (section.trim() === "General advice") {
+              currentSection = "General advice"
+            } else {
+              currentSection = section.trim()
+              feedbackItems.push({ section: currentSection, feedback: feedback.trim() })
+            }
+          } else if (currentSection === "General advice") {
+            generalAdvice.push(line.trim())
+          } else if (currentSection && feedbackItems.length > 0) {
+            feedbackItems[feedbackItems.length - 1].feedback += " " + line.trim()
+          }
+        })
+
+        setFeedback(feedbackItems)
+        setImprovementSuggestions(generalAdvice)
       }
     } catch (error) {
       console.error("Error analyzing resume:", error)
@@ -167,11 +202,10 @@ export function ResumePlatform() {
               )}
             </CardContent>
             <CardFooter>
-              <Button onClick={analyzeResume}>Analyze Resume</Button>
+              <Button onClick={(e) => analyzeResume()}>Analyze Resume</Button>
             </CardFooter>
           </Card>
         </TabsContent>
-        
         <TabsContent value="edit">
           <Card>
             <CardHeader>
@@ -208,15 +242,16 @@ export function ResumePlatform() {
 
                 <div className="mb-6">
                   <h3 className="text-lg font-semibold mb-2">Feedback</h3>
-                  <ul className="list-disc pl-5 space-y-2">
-                    {feedback.map((item, index) => (
-                      <li key={index} className="text-sm">{item}</li>
-                    ))}
-                  </ul>
+                  {feedback.map((item, index) => (
+                    <div key={index} className="mb-4">
+                      <h4 className="font-semibold">{item.section}</h4>
+                      <p className="text-sm">{item.feedback}</p>
+                    </div>
+                  ))}
                 </div>
 
                 <div>
-                  <h3 className="text-lg font-semibold mb-2">Improvement Suggestions</h3>
+                  <h3 className="text-lg font-semibold mb-2">General Advice</h3>
                   <ul className="list-disc pl-5 space-y-2">
                     {improvementSuggestions.map((suggestion, index) => (
                       <li key={index} className="text-sm">{suggestion}</li>
