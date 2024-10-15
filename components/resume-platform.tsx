@@ -7,9 +7,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
-import { Upload, FileText, Edit3, Download, Save, Eye, CheckCircle } from 'lucide-react'
+import { Upload, FileText, Edit3, Download, Save, Eye, CheckCircle, AlertCircle } from 'lucide-react'
 import OpenAI from 'openai'
 import pdfParse from 'pdf-parse'
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -30,6 +31,11 @@ export function ResumePlatform() {
   const [resumeVersions, setResumeVersions] = useState<{ id: number; name: string; content: string }[]>([])
   const [currentVersionId, setCurrentVersionId] = useState<number | null>(null)
   const [selectedTemplate, setSelectedTemplate] = useState("modern")
+  const [atsScore, setAtsScore] = useState(0)
+  const [atsFeedback, setAtsFeedback] = useState<string[]>([])
+  const [atsImprovements, setAtsImprovements] = useState<string[]>([])
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -52,7 +58,7 @@ export function ResumePlatform() {
         setUploadSuccess(true)
         setUploadedFileName(file.name)
         // Automatically analyze the resume after upload
-        await analyzeResume(data.text)
+        await analyzeResumeForATS(data.text)
       } catch (error) {
         console.error("Error parsing file:", error)
         // Handle error (e.g., show error message to user)
@@ -80,6 +86,65 @@ export function ResumePlatform() {
     } catch (error) {
       console.error("Error analyzing job description:", error)
       // Handle error (e.g., show error message to user)
+    }
+  }
+
+  const analyzeResumeForATS = async (content: string = resumeContent) => {
+    if (!content) {
+      setError("Resume content is missing")
+      return
+    }
+
+    setIsAnalyzing(true)
+    setError(null)
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          { role: "system", content: `You are an AI assistant that analyzes resumes for ATS (Applicant Tracking System) compliance. Provide a score, feedback, and improvement suggestions. 
+
+          Your response should be in the following format:
+          Score: [0-100]
+          Overall: [Brief overall assessment]
+          Strengths:
+          - [Strength 1]
+          - [Strength 2]
+          Weaknesses:
+          - [Weakness 1]
+          - [Weakness 2]
+          Improvements:
+          - [Improvement 1]
+          - [Improvement 2]
+
+          Ensure the score and feedback are consistent. A high score (80-100) should indicate an excellent resume, a medium score (60-79) a good resume needing some improvements, and a low score (0-59) a resume needing significant improvements.` },
+          { role: "user", content: `Analyze this resume for ATS compliance and provide feedback: ${content}` }
+        ],
+        max_tokens: 1000
+      })
+
+      const analysisResult = response.choices[0].message.content
+      if (analysisResult) {
+        const sections = analysisResult.split('\n\n')
+        const scoreMatch = sections[0].match(/Score: (\d+)/)
+        const score = scoreMatch ? parseInt(scoreMatch[1]) : 0
+        setAtsScore(score)
+
+        const overallFeedback = sections[1].replace('Overall: ', '')
+        const strengths = sections[2].split('\n').slice(1).map(s => s.trim())
+        const weaknesses = sections[3].split('\n').slice(1).map(w => w.trim())
+        const improvements = sections[4].split('\n').slice(1).map(i => i.trim())
+
+        setAtsFeedback([overallFeedback, ...strengths, ...weaknesses])
+        setAtsImprovements(improvements)
+      } else {
+        setError("No analysis result received")
+      }
+    } catch (error) {
+      console.error("Error analyzing resume for ATS:", error)
+      setError("An error occurred while analyzing the resume")
+    } finally {
+      setIsAnalyzing(false)
     }
   }
 
@@ -219,45 +284,71 @@ Output Format:
                 placeholder="Your resume content..."
                 rows={10}
               />
-              <Button onClick={() => analyzeResume()} className="mt-4">Re-analyze Resume</Button>
+              <Button 
+                onClick={() => analyzeResumeForATS()} 
+                className="mt-4"
+                disabled={isAnalyzing}
+              >
+                {isAnalyzing ? 'Analyzing...' : 'Re-analyze Resume'}
+              </Button>
             </CardContent>
           </Card>
           
-          {compatibilityScore > 0 && (
+          {error && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          
+          {atsScore > 0 && !isAnalyzing && (
             <Card className="mt-4">
               <CardHeader>
-                <CardTitle>Resume Analysis Results</CardTitle>
+                <CardTitle>ATS Compliance Analysis</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold mb-2">Compatibility Score</h3>
+                <div className="mb-4">
+                  <h3 className="text-lg font-semibold mb-2">ATS Compliance Score</h3>
                   <div className="flex items-center">
-                    <Progress value={compatibilityScore} className="w-full mr-4" />
-                    <span className="text-xl font-bold">{compatibilityScore}%</span>
+                    <Progress value={atsScore} className="w-full mr-4" />
+                    <span className="text-xl font-bold">{atsScore}%</span>
                   </div>
-                  <p className="mt-2 text-sm text-gray-600">
-                    This score indicates how well your resume matches the job description.
-                  </p>
                 </div>
 
-                <div className="mb-6">
-                  <h3 className="text-lg font-semibold mb-2">Feedback</h3>
-                  {feedback.map((item, index) => (
-                    <div key={index} className="mb-4">
-                      <h4 className="font-semibold">{item.section}</h4>
-                      <p className="text-sm">{item.feedback}</p>
+                {atsFeedback.length > 0 && (
+                  <div className="mb-4">
+                    <h3 className="text-lg font-semibold mb-2">Feedback</h3>
+                    <p className="mb-2"><strong>Overall:</strong> {atsFeedback[0]}</p>
+                    <div className="mb-2">
+                      <strong>Strengths:</strong>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {atsFeedback.slice(1, 3).map((item, index) => (
+                          <li key={index}>{item}</li>
+                        ))}
+                      </ul>
                     </div>
-                  ))}
-                </div>
+                    <div>
+                      <strong>Weaknesses:</strong>
+                      <ul className="list-disc pl-5 space-y-1">
+                        {atsFeedback.slice(3).map((item, index) => (
+                          <li key={index}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                )}
 
-                <div>
-                  <h3 className="text-lg font-semibold mb-2">General Advice</h3>
-                  <ul className="list-disc pl-5 space-y-2">
-                    {improvementSuggestions.map((suggestion, index) => (
-                      <li key={index} className="text-sm">{suggestion}</li>
-                    ))}
-                  </ul>
-                </div>
+                {atsImprovements.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Improvement Suggestions</h3>
+                    <ul className="list-disc pl-5 space-y-2">
+                      {atsImprovements.map((item, index) => (
+                        <li key={index}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
