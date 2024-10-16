@@ -89,9 +89,18 @@ export function ResumePlatform() {
     }
   }
 
+  const handleJobDescriptionInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setJobDescription(event.target.value)
+  }
+
   const analyzeResumeForATS = async (content: string = resumeContent) => {
     if (!content) {
       setError("Resume content is missing")
+      return
+    }
+
+    if (!jobDescription) {
+      setError("Job description is missing")
       return
     }
 
@@ -102,7 +111,7 @@ export function ResumePlatform() {
       const response = await openai.chat.completions.create({
         model: "gpt-4",
         messages: [
-          { role: "system", content: `You are an AI assistant that analyzes resumes for ATS (Applicant Tracking System) compliance. Provide a score, feedback, and improvement suggestions. 
+          { role: "system", content: `You are an AI assistant that analyzes resumes for ATS (Applicant Tracking System) compliance and compares them to job descriptions. Provide a score, feedback, and improvement suggestions. 
 
           Your response should be in the following format:
           Score: [0-100]
@@ -117,8 +126,12 @@ export function ResumePlatform() {
           - [Improvement 1]
           - [Improvement 2]
 
-          Ensure the score and feedback are consistent. A high score (80-100) should indicate an excellent resume, a medium score (60-79) a good resume needing some improvements, and a low score (0-59) a resume needing significant improvements.` },
-          { role: "user", content: `Analyze this resume for ATS compliance and provide feedback: ${content}` }
+          Ensure the score and feedback are consistent. A high score (80-100) should indicate an excellent match with the job description, a medium score (60-79) a good match needing some improvements, and a low score (0-59) a poor match needing significant improvements.` },
+          { role: "user", content: `Analyze this resume for ATS compliance and compare it to the job description. Provide feedback:
+
+          Resume: ${content}
+
+          Job Description: ${jobDescription}` }
         ],
         max_tokens: 1000
       })
@@ -284,12 +297,19 @@ Output Format:
                 placeholder="Your resume content..."
                 rows={10}
               />
+              <Textarea 
+                value={jobDescription} 
+                onChange={handleJobDescriptionInput}
+                placeholder="Paste job description here..."
+                rows={5}
+                className="mt-4"
+              />
               <Button 
                 onClick={() => analyzeResumeForATS()} 
                 className="mt-4"
-                disabled={isAnalyzing}
+                disabled={isAnalyzing || !resumeContent || !jobDescription}
               >
-                {isAnalyzing ? 'Analyzing...' : 'Re-analyze Resume'}
+                {isAnalyzing ? 'Analyzing...' : 'Analyze Resume'}
               </Button>
             </CardContent>
           </Card>
